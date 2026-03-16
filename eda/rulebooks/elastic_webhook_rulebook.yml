@@ -1,10 +1,7 @@
 ---
-# Elastic Webhook Rulebook
-# Receives alerts from Elastic Observability via webhook and triggers
-# appropriate remediation playbooks based on alert type.
-#
-# Usage:
-#   ansible-rulebook --rulebook eda/rulebooks/elastic_webhook_rulebook.yml -i inventory/hosts.yml
+# Elastic Webhook Rulebook for AAP EDA
+# Receives alerts from Elastic Observability via webhook and dispatches
+# remediation job templates on the AAP Controller.
 
 - name: Elastic Observability Alert Remediation
   hosts: all
@@ -16,66 +13,68 @@
   rules:
     # ---------------------------------------------------------------
     # Rule 1 - High CPU
-    # Matches Elastic alert names containing "high cpu" (case-insensitive)
-    # or an explicit alert_type of "high_cpu".
     # ---------------------------------------------------------------
     - name: Remediate High CPU Alert
       condition: >-
-        event.payload.rule.name is match(".*high.cpu.*", ignorecase=true)
-        or event.payload.alert_type == "high_cpu"
+        event.payload.rule is defined
+        and event.payload.rule.name is match(".*high.cpu.*", ignorecase=true)
+        or (event.payload.alert_type is defined and event.payload.alert_type == "high_cpu")
       action:
-        run_playbook:
-          name: playbooks/remediation/remediate_high_cpu.yml
-          extra_vars:
-            target_hosts: "{{ event.payload.host | default(event.payload.context.host, true) }}"
-            correlation_id: "{{ event.payload.alert_id }}"
+        run_job_template:
+          name: "FDA - Remediate High CPU"
+          organization: "Default"
+          job_args:
+            extra_vars:
+              target_hosts: "{{ event.payload.host | default('all') }}"
+              correlation_id: "{{ event.payload.alert_id | default('eda-triggered') }}"
 
     # ---------------------------------------------------------------
     # Rule 2 - Disk Full / Disk Space
-    # Matches alerts whose name contains "disk full" or "disk space"
-    # or an explicit alert_type of "disk_full".
     # ---------------------------------------------------------------
     - name: Remediate Disk Full Alert
       condition: >-
-        event.payload.rule.name is match(".*disk.full.*", ignorecase=true)
-        or event.payload.rule.name is match(".*disk.space.*", ignorecase=true)
-        or event.payload.alert_type == "disk_full"
+        event.payload.rule is defined
+        and (event.payload.rule.name is match(".*disk.full.*", ignorecase=true)
+        or event.payload.rule.name is match(".*disk.space.*", ignorecase=true))
+        or (event.payload.alert_type is defined and event.payload.alert_type == "disk_full")
       action:
-        run_playbook:
-          name: playbooks/remediation/remediate_disk_full.yml
-          extra_vars:
-            target_hosts: "{{ event.payload.host | default(event.payload.context.host, true) }}"
-            correlation_id: "{{ event.payload.alert_id }}"
+        run_job_template:
+          name: "FDA - Remediate Disk Full"
+          organization: "Default"
+          job_args:
+            extra_vars:
+              target_hosts: "{{ event.payload.host | default('all') }}"
+              correlation_id: "{{ event.payload.alert_id | default('eda-triggered') }}"
 
     # ---------------------------------------------------------------
     # Rule 3 - Service Down
-    # Matches alerts whose name contains "service down" or an explicit
-    # alert_type of "service_down". Passes the affected service name
-    # from the event payload.
     # ---------------------------------------------------------------
     - name: Remediate Service Down Alert
       condition: >-
-        event.payload.rule.name is match(".*service.down.*", ignorecase=true)
-        or event.payload.alert_type == "service_down"
+        event.payload.rule is defined
+        and event.payload.rule.name is match(".*service.down.*", ignorecase=true)
+        or (event.payload.alert_type is defined and event.payload.alert_type == "service_down")
       action:
-        run_playbook:
-          name: playbooks/remediation/remediate_service_down.yml
-          extra_vars:
-            target_hosts: "{{ event.payload.host | default(event.payload.context.host, true) }}"
-            service_name: "{{ event.payload.service_name | default(event.payload.context.service, true) }}"
-            correlation_id: "{{ event.payload.alert_id }}"
+        run_job_template:
+          name: "FDA - Remediate Service Down"
+          organization: "Default"
+          job_args:
+            extra_vars:
+              target_hosts: "{{ event.payload.host | default('all') }}"
+              service_name: "{{ event.payload.service_name | default('nginx') }}"
+              correlation_id: "{{ event.payload.alert_id | default('eda-triggered') }}"
 
     # ---------------------------------------------------------------
     # Rule 4 - Catch-All / Unhandled Alerts
-    # Any event that did not match the rules above is logged to an
-    # audit trail for later review.
     # ---------------------------------------------------------------
     - name: Log Unhandled Alert
-      condition: event.payload is defined
+      condition: >-
+        event.payload is defined
+        and (event.payload.rule is not defined
+             or (event.payload.rule.name is not match(".*high.cpu.*", ignorecase=true)
+                 and event.payload.rule.name is not match(".*disk.full.*", ignorecase=true)
+                 and event.payload.rule.name is not match(".*disk.space.*", ignorecase=true)
+                 and event.payload.rule.name is not match(".*service.down.*", ignorecase=true)))
       action:
-        run_playbook:
-          name: playbooks/remediation/log_unhandled_alert.yml
-          extra_vars:
-            alert_payload: "{{ event.payload }}"
-            alert_source: "{{ event.payload.rule.name | default('unknown') }}"
-            received_at: "{{ event.payload.timestamp | default(ansible_date_time.iso8601, true) }}"
+        debug:
+          msg: "Unhandled alert received: {{ event.payload }}"
