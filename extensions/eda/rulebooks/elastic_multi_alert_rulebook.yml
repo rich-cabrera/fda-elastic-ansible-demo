@@ -1,0 +1,178 @@
+---
+# Elastic Multi-Alert Rulebook (Advanced)
+#
+# Demonstrates several Event-Driven Ansible capabilities for demo purposes:
+#   1. Throttling    - Prevents the same alert from triggering remediation
+#                      more than once within a 5-minute window.
+#   2. Severity-based routing - Routes alerts to different workflows
+#                      depending on their severity level.
+#   3. Correlation   - Detects multiple alerts firing for the same host
+#                      within a time window and escalates accordingly.
+#
+# Usage:
+#   ansible-rulebook --rulebook eda/rulebooks/elastic_multi_alert_rulebook.yml \
+#                    -i inventory/hosts.yml \
+#                    --vars eda/rulebooks/eda_vars.yml
+
+- name: Elastic Multi-Alert Routing and Correlation
+  hosts: all
+  sources:
+    - ansible.eda.webhook:
+        host: 0.0.0.0
+        port: "{{ eda_webhook_port | default(5000) }}"
+
+  rules:
+    # =================================================================
+    #  SEVERITY-BASED ROUTING
+    #
+    #  Elastic alerts include a severity field (critical, high, medium,
+    #  low, info). The rules below route each alert to the appropriate
+    #  workflow. Rules are evaluated top-down; the first match wins.
+    # =================================================================
+
+    # -----------------------------------------------------------------
+    # Critical Severity - Immediate remediation + notification
+    #
+    # For critical alerts we run the remediation playbook AND send a
+    # notification so the on-call team is aware. The throttle option
+    # ensures the same alert (keyed on alert_id) does not re-trigger
+    # within 5 minutes.
+    # -----------------------------------------------------------------
+    - name: "Critical Alert - Immediate Remediation and Notification"
+      condition: >-
+        event.payload.severity == "critical"
+        or event.payload.kibana.alert.severity == "critical"
+      throttle:
+        group_by_attributes:
+          - event.payload.alert_id
+        once_within: "{{ throttle_window_seconds | default(300) }} seconds"
+      action:
+        run_playbook:
+          name: playbooks/remediation/route_critical_alert.yml
+          extra_vars:
+            target_hosts: "{{ event.payload.host | default(event.payload.context.host, true) }}"
+            alert_name: "{{ event.payload.rule.name | default('unknown') }}"
+            alert_id: "{{ event.payload.alert_id }}"
+            severity: "critical"
+            notify: true
+            correlation_id: "{{ event.payload.alert_id }}"
+
+    # -----------------------------------------------------------------
+    # High Severity - Standard-priority remediation
+    #
+    # Remediation runs but without the immediate notification blast.
+    # Throttled identically to critical alerts.
+    # -----------------------------------------------------------------
+    - name: "High Alert - Standard Priority Remediation"
+      condition: >-
+        event.payload.severity == "high"
+        or event.payload.kibana.alert.severity == "high"
+      throttle:
+        group_by_attributes:
+          - event.payload.alert_id
+        once_within: "{{ throttle_window_seconds | default(300) }} seconds"
+      action:
+        run_playbook:
+          name: playbooks/remediation/route_high_alert.yml
+          extra_vars:
+            target_hosts: "{{ event.payload.host | default(event.payload.context.host, true) }}"
+            alert_name: "{{ event.payload.rule.name | default('unknown') }}"
+            alert_id: "{{ event.payload.alert_id }}"
+            severity: "high"
+            notify: false
+            correlation_id: "{{ event.payload.alert_id }}"
+
+    # -----------------------------------------------------------------
+    # Medium Severity - Log and create ticket
+    #
+    # No automated remediation. The playbook logs the alert details
+    # and creates a ticket in the configured ticketing system for
+    # manual follow-up.
+    # -----------------------------------------------------------------
+    - name: "Medium Alert - Log and Create Ticket"
+      condition: >-
+        event.payload.severity == "medium"
+        or event.payload.kibana.alert.severity == "medium"
+      throttle:
+        group_by_attributes:
+          - event.payload.alert_id
+        once_within: "{{ throttle_window_seconds | default(300) }} seconds"
+      action:
+        run_playbook:
+          name: playbooks/remediation/log_and_ticket.yml
+          extra_vars:
+            target_hosts: "{{ event.payload.host | default(event.payload.context.host, true) }}"
+            alert_name: "{{ event.payload.rule.name | default('unknown') }}"
+            alert_id: "{{ event.payload.alert_id }}"
+            severity: "medium"
+
+    # -----------------------------------------------------------------
+    # Low / Info Severity - Log only
+    #
+    # Informational alerts are recorded for audit purposes but no
+    # action is taken.
+    # -----------------------------------------------------------------
+    - name: "Low/Info Alert - Log Only"
+      condition: >-
+        event.payload.severity == "low"
+        or event.payload.severity == "info"
+        or event.payload.kibana.alert.severity == "low"
+        or event.payload.kibana.alert.severity == "info"
+      throttle:
+        group_by_attributes:
+          - event.payload.alert_id
+        once_within: "{{ throttle_window_seconds | default(300) }} seconds"
+      action:
+        run_playbook:
+          name: playbooks/remediation/log_alert.yml
+          extra_vars:
+            alert_name: "{{ event.payload.rule.name | default('unknown') }}"
+            alert_id: "{{ event.payload.alert_id }}"
+            severity: "{{ event.payload.severity | default('info') }}"
+
+    # =================================================================
+    #  CORRELATION - Multiple alerts for the same host
+    #
+    #  If we receive more than one alert for the same host within a
+    #  short window, that host may be experiencing a cascading failure.
+    #  This rule detects the pattern and escalates to a dedicated
+    #  playbook that can gather diagnostics and page the on-call team.
+    #
+    #  How it works:
+    #    - The reactive condition uses "events" (plural) to collect
+    #      multiple matching events within the specified time window.
+    #    - When two or more alerts share the same host value inside the
+    #      window, the escalation playbook fires.
+    # =================================================================
+    - name: "Correlated Alerts - Escalate Multi-Alert Host"
+      condition:
+        all:
+          - events.first << event.payload.host is defined
+          - events.second << event.payload.host is defined
+          - events.first.payload.host == events.second.payload.host
+          - events.first.payload.alert_id != events.second.payload.alert_id
+      throttle:
+        group_by_attributes:
+          - event.payload.host
+        once_within: "{{ throttle_window_seconds | default(300) }} seconds"
+      action:
+        run_playbook:
+          name: playbooks/remediation/escalate_correlated_alerts.yml
+          extra_vars:
+            target_hosts: "{{ events.first.payload.host }}"
+            first_alert: "{{ events.first.payload.rule.name | default('unknown') }}"
+            second_alert: "{{ events.second.payload.rule.name | default('unknown') }}"
+            escalation_reason: "Multiple alerts detected for the same host within the correlation window"
+
+    # -----------------------------------------------------------------
+    # Catch-all for anything that slips through
+    # -----------------------------------------------------------------
+    - name: "Unmatched Alert - Audit Log"
+      condition: event.payload is defined
+      action:
+        debug:
+          msg: >-
+            Unhandled alert received - rule: {{ event.payload.rule.name | default('unknown') }},
+            severity: {{ event.payload.severity | default('unknown') }},
+            host: {{ event.payload.host | default('unknown') }},
+            payload: {{ event.payload }}
