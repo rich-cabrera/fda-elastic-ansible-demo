@@ -1,0 +1,48 @@
+---
+# simulate_high_cpu.yml
+# Simulates high CPU usage to trigger Elastic Observability alerts
+# Usage: ansible-playbook playbooks/simulation/simulate_high_cpu.yml -e "target_hosts=managed_hosts"
+
+- name: Simulate High CPU Usage
+  hosts: "{{ target_hosts | default('managed_hosts') }}"
+  become: true
+
+  vars:
+    cpu_stress_duration: 120  # seconds
+    cpu_cores_to_stress: 2
+
+  tasks:
+    - name: Install stress-ng if not present
+      ansible.builtin.package:
+        name: stress-ng
+        state: present
+
+    - name: Log simulation start to audit trail
+      ansible.builtin.include_role:
+        name: audit_log
+      vars:
+        action: "simulation_start"
+        category: "testing"
+        details: "High CPU stress test - {{ cpu_cores_to_stress }} cores for {{ cpu_stress_duration }}s"
+
+    - name: Run stress-ng in background
+      ansible.builtin.shell: >
+        stress-ng --cpu {{ cpu_cores_to_stress }} --timeout {{ cpu_stress_duration }}s &
+      async: "{{ cpu_stress_duration | int + 30 }}"
+      poll: 0
+      register: stress_job
+
+    - name: Display simulation status
+      ansible.builtin.debug:
+        msg: >
+          CPU stress test running for {{ cpu_stress_duration }} seconds.
+          Monitor Elastic for alert trigger.
+          Stressing {{ cpu_cores_to_stress }} CPU cores on {{ inventory_hostname }}.
+
+    - name: Wait for stress to complete
+      ansible.builtin.async_status:
+        jid: "{{ stress_job.ansible_job_id }}"
+      register: stress_result
+      until: stress_result.finished
+      retries: "{{ ((cpu_stress_duration | int + 30) / 10) | int }}"
+      delay: 10

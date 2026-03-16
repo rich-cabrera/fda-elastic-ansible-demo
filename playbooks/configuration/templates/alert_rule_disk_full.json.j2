@@ -1,0 +1,36 @@
+{
+  "name": "FDA - Disk Full Warning",
+  "rule_type_id": "metrics.alert.threshold",
+  "consumer": "infrastructure",
+  "enabled": true,
+  "params": {
+    "criteria": [
+      {
+        "metric": "system.filesystem.used.pct",
+        "comparator": ">",
+        "threshold": [0.85],
+        "timeSize": 5,
+        "timeUnit": "m",
+        "aggType": "avg"
+      }
+    ],
+    "sourceId": "default",
+    "alertOnNoData": false,
+    "alertOnGroupDisappear": false,
+    "groupBy": ["host.name"]
+  },
+  "schedule": {
+    "interval": "{{ item.schedule_interval | default('5m') }}"
+  },
+  "tags": {{ item.tags | default(["fda", "infrastructure", "disk", "eda-enabled"]) | to_json }},
+  "notify_when": "onActionGroupChange",
+  "actions": [
+    {
+      "group": "metrics.threshold.fired",
+      "id": "{{ connector_id }}",
+      "params": {
+        "body": "{\"alert_name\": \"FDA - Disk Full Warning\", \"alert_id\": \"{% raw %}{{rule.id}}{% endraw %}\", \"host\": \"{% raw %}{{context.group}}{% endraw %}\", \"metric\": \"system.filesystem.used.pct\", \"value\": \"{% raw %}{{context.value}}{% endraw %}\", \"threshold\": 0.85, \"severity\": \"warning\", \"timestamp\": \"{% raw %}{{date}}{% endraw %}\", \"source\": \"elastic-observability\", \"action_required\": \"disk_cleanup\"}"
+      }
+    }
+  ]
+}

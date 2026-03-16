@@ -1,0 +1,123 @@
+---
+# generate_audit_report.yml
+# Generates an FDA 21 CFR Part 11 compliance audit report from Elasticsearch data
+# Usage: ansible-playbook playbooks/compliance/generate_audit_report.yml
+# Optional: -e "report_start_date=2026-02-01T00:00:00Z report_end_date=2026-03-01T00:00:00Z"
+
+- name: Generate FDA 21 CFR Part 11 Compliance Audit Report
+  hosts: localhost
+  connection: local
+
+  vars:
+    elasticsearch_host: "{{ lookup('env', 'ELASTICSEARCH_HOST') | default('https://localhost:9200', true) }}"
+    elasticsearch_user: "{{ lookup('env', 'ELASTICSEARCH_USER') | default('elastic', true) }}"
+    elasticsearch_password: "{{ lookup('env', 'ELASTICSEARCH_PASSWORD') | default('changeme', true) }}"
+    audit_index: "ansible-audit-trail"
+    executions_index: "ansible-executions"
+    report_start_date: "{{ '%Y-%m-%dT%H:%M:%SZ' | strftime(ansible_date_time.epoch | int - 2592000) }}"
+    report_end_date: "{{ ansible_date_time.iso8601 }}"
+    report_output_dir: ./reports
+
+  tasks:
+    - name: Create report output directory
+      ansible.builtin.file:
+        path: "{{ report_output_dir }}"
+        state: directory
+        mode: '0755'
+
+    - name: Query Elasticsearch audit trail index for date range
+      ansible.builtin.uri:
+        url: "{{ elasticsearch_host }}/{{ audit_index }}/_search"
+        method: POST
+        user: "{{ elasticsearch_user }}"
+        password: "{{ elasticsearch_password }}"
+        force_basic_auth: true
+        validate_certs: false
+        headers:
+          Content-Type: "application/json"
+        body_format: json
+        body:
+          size: 10000
+          sort:
+            - "@timestamp":
+                order: "asc"
+          query:
+            range:
+              "@timestamp":
+                gte: "{{ report_start_date }}"
+                lte: "{{ report_end_date }}"
+      register: audit_results
+      ignore_errors: true
+
+    - name: Query ansible executions index for summary stats
+      ansible.builtin.uri:
+        url: "{{ elasticsearch_host }}/{{ executions_index }}/_search"
+        method: POST
+        user: "{{ elasticsearch_user }}"
+        password: "{{ elasticsearch_password }}"
+        force_basic_auth: true
+        validate_certs: false
+        headers:
+          Content-Type: "application/json"
+        body_format: json
+        body:
+          size: 0
+          query:
+            range:
+              "@timestamp":
+                gte: "{{ report_start_date }}"
+                lte: "{{ report_end_date }}"
+          aggs:
+            by_playbook:
+              terms:
+                field: "playbook.keyword"
+                size: 50
+            by_result:
+              terms:
+                field: "result.keyword"
+                size: 10
+      register: execution_results
+      ignore_errors: true
+
+    - name: Set audit event facts
+      ansible.builtin.set_fact:
+        audit_events: "{{ audit_results.json.hits.hits | default([]) | map(attribute='_source') | list }}"
+        total_events: "{{ audit_results.json.hits.total.value | default(0) }}"
+      when: audit_results is succeeded
+
+    - name: Set default facts when Elasticsearch is unavailable
+      ansible.builtin.set_fact:
+        audit_events: []
+        total_events: 0
+      when: audit_results is failed
+
+    - name: Categorize events
+      ansible.builtin.set_fact:
+        events_by_category: >-
+          {{ audit_events | groupby('category') | items2dict(key_name=0, value_name=1) if audit_events | length > 0 else {} }}
+        events_by_result: >-
+          {{ audit_events | groupby('result') | items2dict(key_name=0, value_name=1) if audit_events | length > 0 else {} }}
+        events_by_actor: >-
+          {{ audit_events | groupby('actor') | items2dict(key_name=0, value_name=1) if audit_events | length > 0 else {} }}
+
+    - name: Generate HTML compliance report
+      ansible.builtin.template:
+        src: templates/compliance_report.html.j2
+        dest: "{{ report_output_dir }}/compliance_report_{{ ansible_date_time.date }}.html"
+        mode: '0644'
+
+    - name: Display report location
+      ansible.builtin.debug:
+        msg:
+          - "Compliance audit report generated successfully."
+          - "Location: {{ report_output_dir }}/compliance_report_{{ ansible_date_time.date }}.html"
+          - "Report period: {{ report_start_date }} to {{ report_end_date }}"
+          - "Total audit events: {{ total_events }}"
+
+    - name: Log report generation to audit trail
+      ansible.builtin.include_role:
+        name: audit_log
+      vars:
+        action: "compliance_report_generated"
+        category: "compliance"
+        details: "Audit report generated for period {{ report_start_date }} to {{ report_end_date }} - {{ total_events }} events"

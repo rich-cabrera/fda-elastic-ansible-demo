@@ -1,0 +1,62 @@
+{
+  "index_patterns": ["fda-demo-ansible-executions-*"],
+  "priority": 200,
+  "template": {
+    "settings": {
+      "number_of_shards": 1,
+      "number_of_replicas": 1
+    },
+    "mappings": {
+      "properties": {
+        "@timestamp": {
+          "type": "date"
+        },
+        "playbook_name": {
+          "type": "keyword"
+        },
+        "playbook_status": {
+          "type": "keyword"
+        },
+        "host": {
+          "type": "keyword"
+        },
+        "task_name": {
+          "type": "keyword"
+        },
+        "task_action": {
+          "type": "keyword"
+        },
+        "task_status": {
+          "type": "keyword"
+        },
+        "duration_seconds": {
+          "type": "float"
+        },
+        "ansible_user": {
+          "type": "keyword"
+        },
+        "extra_vars": {
+          "type": "flattened"
+        },
+        "tags": {
+          "type": "keyword"
+        },
+        "changed": {
+          "type": "boolean"
+        },
+        "failures": {
+          "type": "integer"
+        },
+        "ok_count": {
+          "type": "integer"
+        },
+        "skipped": {
+          "type": "integer"
+        },
+        "environment": {
+          "type": "keyword"
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,215 @@
+---
+# remediate_service_down.yml
+# Automated remediation for service down alerts.
+# Maintains full 21 CFR Part 11 audit trail throughout execution.
+#
+# Usage:
+#   ansible-playbook playbooks/remediation/remediate_service_down.yml \
+#     -e "target_hosts=web_servers" \
+#     -e "service_name=nginx" \
+#     -e "correlation_id=abc-123"
+
+- name: "Remediate Service Down (21 CFR Part 11 Audited)"
+  hosts: "{{ target_hosts | default('managed_hosts') }}"
+  become: true
+  gather_facts: true
+
+  vars:
+    correlation_id: "{{ correlation_id | default(ansible_date_time.iso8601_micro | to_uuid) }}"
+    restart_retries: 3
+    restart_delay: 10
+    post_restart_wait: 15
+
+  pre_tasks:
+    - name: Validate required variable -- service_name
+      assert:
+        that:
+          - service_name is defined
+          - service_name | length > 0
+        fail_msg: >-
+          ERROR: 'service_name' is a required extra variable.
+          Usage: -e "service_name=<name_of_service>"
+        success_msg: "Service to remediate: {{ service_name }}"
+
+  tasks:
+    # ---------------------------------------------------------------
+    # STEP 1: Audit log -- remediation start
+    # ---------------------------------------------------------------
+    - name: "AUDIT: Log remediation start"
+      include_role:
+        name: audit_log
+      vars:
+        audit_action: "service_down_remediation_start"
+        audit_action_category: "remediation"
+        audit_target_service: "{{ service_name }}"
+        audit_change_description: "Initiating service-down remediation for {{ service_name }} on {{ inventory_hostname }}"
+        audit_result: "in_progress"
+
+    # ---------------------------------------------------------------
+    # STEP 2: Check current service status
+    # ---------------------------------------------------------------
+    - name: Check current service status
+      shell: "systemctl is-active {{ service_name }} 2>/dev/null || echo 'inactive'"
+      register: initial_service_status
+      changed_when: false
+
+    - name: Gather detailed service information
+      shell: "systemctl status {{ service_name }} 2>&1 || true"
+      register: service_details
+      changed_when: false
+
+    - name: Check for recent service logs
+      shell: "journalctl -u {{ service_name }} --no-pager -n 20 --since '1 hour ago' 2>/dev/null || true"
+      register: service_logs
+      changed_when: false
+
+    - name: Set initial service state
+      set_fact:
+        initial_state: "{{ initial_service_status.stdout | trim }}"
+
+    - name: Display current service state
+      debug:
+        msg: >
+          Host: {{ inventory_hostname }}
+          Service: {{ service_name }}
+          Current status: {{ initial_state }}
+          Recent logs: {{ service_logs.stdout_lines | default([]) | last | default('no recent logs') }}
+
+    # ---------------------------------------------------------------
+    # STEP 3: Attempt service restart
+    # ---------------------------------------------------------------
+    - name: "AUDIT: Log restart attempt"
+      include_role:
+        name: audit_log
+      vars:
+        audit_action: "service_restart_attempt"
+        audit_action_category: "remediation"
+        audit_target_service: "{{ service_name }}"
+        audit_change_description: "Attempting to restart {{ service_name }} (current state: {{ initial_state }})"
+        audit_previous_state: "{{ initial_state }}"
+
+    - name: Attempt to restart the service
+      systemd:
+        name: "{{ service_name }}"
+        state: restarted
+        daemon_reload: true
+      register: restart_result
+      retries: "{{ restart_retries }}"
+      delay: "{{ restart_delay }}"
+      until: restart_result is succeeded
+      failed_when: false
+
+    - name: Wait for service to stabilize after restart
+      pause:
+        seconds: "{{ post_restart_wait }}"
+
+    # ---------------------------------------------------------------
+    # STEP 4: Verify service is running
+    # ---------------------------------------------------------------
+    - name: Verify service status after restart
+      shell: "systemctl is-active {{ service_name }} 2>/dev/null || echo 'inactive'"
+      register: post_restart_status
+      changed_when: false
+
+    - name: Set post-restart state
+      set_fact:
+        post_restart_state: "{{ post_restart_status.stdout | trim }}"
+
+    - name: Check if service is listening on expected port (if applicable)
+      shell: "ss -tlnp | grep {{ service_name }} || true"
+      register: port_check
+      changed_when: false
+
+    # ---------------------------------------------------------------
+    # STEP 5: Handle restart success
+    # ---------------------------------------------------------------
+    - name: "AUDIT: Log successful restart"
+      include_role:
+        name: audit_log
+      vars:
+        audit_action: "service_restart_success"
+        audit_action_category: "remediation"
+        audit_target_service: "{{ service_name }}"
+        audit_change_description: "Service {{ service_name }} successfully restarted"
+        audit_previous_state: "{{ initial_state }}"
+        audit_new_state: "{{ post_restart_state }}"
+        audit_result: "success"
+      when: post_restart_state == "active"
+
+    # ---------------------------------------------------------------
+    # STEP 6: Escalate if restart failed
+    # ---------------------------------------------------------------
+    - name: Handle failed restart -- escalation
+      block:
+        - name: "AUDIT: Log restart failure and escalation"
+          include_role:
+            name: audit_log
+          vars:
+            audit_action: "service_restart_failed_escalation"
+            audit_action_category: "remediation"
+            audit_target_service: "{{ service_name }}"
+            audit_change_description: >-
+              Service {{ service_name }} failed to restart after {{ restart_retries }} attempts.
+              Escalating for manual intervention.
+            audit_previous_state: "{{ initial_state }}"
+            audit_new_state: "{{ post_restart_state }}"
+            audit_result: "failure"
+
+        - name: Collect diagnostic information for escalation
+          shell: |
+            echo "=== Service Status ==="
+            systemctl status {{ service_name }} 2>&1 || true
+            echo ""
+            echo "=== Recent Journal Logs ==="
+            journalctl -u {{ service_name }} --no-pager -n 50 --since "30 minutes ago" 2>&1 || true
+            echo ""
+            echo "=== Service Configuration ==="
+            systemctl cat {{ service_name }} 2>&1 || true
+          register: diagnostic_info
+          changed_when: false
+
+        - name: Write diagnostic report to /tmp
+          copy:
+            content: |
+              ============================================================
+              SERVICE DOWN ESCALATION REPORT
+              ============================================================
+              Date:         {{ ansible_date_time.iso8601 }}
+              Host:         {{ inventory_hostname }}
+              Service:      {{ service_name }}
+              Correlation:  {{ correlation_id }}
+              Status:       {{ post_restart_state }}
+              Restart attempts: {{ restart_retries }}
+              ============================================================
+
+              {{ diagnostic_info.stdout }}
+            dest: "/tmp/escalation_{{ service_name }}_{{ ansible_date_time.epoch }}.txt"
+            mode: "0644"
+
+        - name: Display escalation notice
+          debug:
+            msg: >
+              ESCALATION REQUIRED: Service {{ service_name }} on {{ inventory_hostname }}
+              could not be automatically restored after {{ restart_retries }} attempts.
+              Diagnostic report saved to /tmp/escalation_{{ service_name }}_{{ ansible_date_time.epoch }}.txt.
+              Correlation ID: {{ correlation_id }}
+              Manual intervention is required.
+
+      when: post_restart_state != "active"
+
+    # ---------------------------------------------------------------
+    # STEP 7: Audit log -- remediation complete
+    # ---------------------------------------------------------------
+    - name: "AUDIT: Log remediation complete"
+      include_role:
+        name: audit_log
+      vars:
+        audit_action: "service_down_remediation_complete"
+        audit_action_category: "remediation"
+        audit_target_service: "{{ service_name }}"
+        audit_change_description: >-
+          Service-down remediation completed for {{ service_name }} on {{ inventory_hostname }}.
+          Final state: {{ post_restart_state }}.
+        audit_previous_state: "{{ initial_state }}"
+        audit_new_state: "{{ post_restart_state }}"
+        audit_result: "{{ 'success' if post_restart_state == 'active' else 'failure' }}"

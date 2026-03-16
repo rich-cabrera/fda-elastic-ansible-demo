@@ -1,0 +1,49 @@
+---
+# simulate_disk_full.yml
+# Simulates disk space exhaustion to trigger Elastic Observability alerts
+# Usage: ansible-playbook playbooks/simulation/simulate_disk_full.yml -e "target_hosts=managed_hosts"
+# Cleanup: Run cleanup_simulations.yml to remove the simulation file
+
+- name: Simulate Disk Full Condition
+  hosts: "{{ target_hosts | default('managed_hosts') }}"
+  become: true
+
+  vars:
+    simulation_file: /tmp/disk_fill_simulation
+    fill_size_mb: 500
+
+  tasks:
+    - name: Check current disk usage
+      ansible.builtin.command: df -h /
+      register: disk_before
+      changed_when: false
+
+    - name: Display current disk usage
+      ansible.builtin.debug:
+        msg: "{{ disk_before.stdout_lines }}"
+
+    - name: Log simulation start to audit trail
+      ansible.builtin.include_role:
+        name: audit_log
+      vars:
+        action: "simulation_start"
+        category: "testing"
+        details: "Disk fill simulation - {{ fill_size_mb }}MB at {{ simulation_file }}"
+
+    - name: Create large file to fill disk space
+      ansible.builtin.command: >
+        dd if=/dev/zero of={{ simulation_file }} bs=1M count={{ fill_size_mb }}
+      register: dd_result
+
+    - name: Check new disk usage
+      ansible.builtin.command: df -h /
+      register: disk_after
+      changed_when: false
+
+    - name: Display new disk usage
+      ansible.builtin.debug:
+        msg:
+          - "Disk usage after simulation file creation:"
+          - "{{ disk_after.stdout_lines }}"
+          - "Simulation file: {{ simulation_file }} ({{ fill_size_mb }}MB)"
+          - "NOTE: Cleanup handled by cleanup_simulations.yml"

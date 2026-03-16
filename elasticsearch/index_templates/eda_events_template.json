@@ -1,0 +1,59 @@
+{
+  "index_patterns": ["fda-demo-eda-events-*"],
+  "priority": 200,
+  "template": {
+    "settings": {
+      "number_of_shards": 1,
+      "number_of_replicas": 1
+    },
+    "mappings": {
+      "properties": {
+        "@timestamp": {
+          "type": "date"
+        },
+        "event_source": {
+          "type": "keyword"
+        },
+        "event_type": {
+          "type": "keyword"
+        },
+        "alert_name": {
+          "type": "keyword"
+        },
+        "alert_id": {
+          "type": "keyword"
+        },
+        "alert_severity": {
+          "type": "keyword"
+        },
+        "webhook_received_at": {
+          "type": "date"
+        },
+        "rulebook_name": {
+          "type": "keyword"
+        },
+        "rule_matched": {
+          "type": "keyword"
+        },
+        "action_triggered": {
+          "type": "keyword"
+        },
+        "playbook_dispatched": {
+          "type": "keyword"
+        },
+        "dispatch_status": {
+          "type": "keyword"
+        },
+        "response_time_ms": {
+          "type": "long"
+        },
+        "source_host": {
+          "type": "keyword"
+        },
+        "payload": {
+          "type": "flattened"
+        }
+      }
+    }
+  }
+}

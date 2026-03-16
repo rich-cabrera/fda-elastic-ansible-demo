@@ -1,0 +1,91 @@
+{
+  "index_patterns": ["fda-demo-audit-trail-*"],
+  "priority": 200,
+  "template": {
+    "settings": {
+      "number_of_shards": 1,
+      "number_of_replicas": 1
+    },
+    "mappings": {
+      "properties": {
+        "@timestamp": {
+          "type": "date"
+        },
+        "event_type": {
+          "type": "keyword"
+        },
+        "action": {
+          "type": "keyword"
+        },
+        "action_category": {
+          "type": "keyword"
+        },
+        "actor": {
+          "type": "keyword"
+        },
+        "actor_type": {
+          "type": "keyword"
+        },
+        "target_host": {
+          "type": "keyword"
+        },
+        "target_service": {
+          "type": "keyword"
+        },
+        "change_description": {
+          "type": "text",
+          "fields": {
+            "keyword": {
+              "type": "keyword",
+              "ignore_above": 1024
+            }
+          }
+        },
+        "previous_state": {
+          "type": "text"
+        },
+        "new_state": {
+          "type": "text"
+        },
+        "result": {
+          "type": "keyword"
+        },
+        "correlation_id": {
+          "type": "keyword"
+        },
+        "elastic_alert_id": {
+          "type": "keyword"
+        },
+        "ansible_playbook": {
+          "type": "keyword"
+        },
+        "ansible_task": {
+          "type": "keyword"
+        },
+        "ansible_role": {
+          "type": "keyword"
+        },
+        "fda_system_name": {
+          "type": "keyword"
+        },
+        "fda_facility_id": {
+          "type": "keyword"
+        },
+        "cfr_part11_electronic_record": {
+          "type": "boolean"
+        },
+        "cfr_part11_audit_trail": {
+          "type": "boolean"
+        },
+        "compliance_tags": {
+          "type": "keyword"
+        }
+      }
+    }
+  },
+  "_meta": {
+    "description": "FDA 21 CFR Part 11 compliant audit trail index template",
+    "compliance": "21 CFR Part 11",
+    "retention": "7+ years (no delete phase)"
+  }
+}

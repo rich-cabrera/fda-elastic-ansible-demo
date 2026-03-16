@@ -1,0 +1,186 @@
+---
+# remediate_disk_full.yml
+# Automated remediation for disk full / high disk usage alerts.
+# Maintains full 21 CFR Part 11 audit trail throughout execution.
+#
+# Usage:
+#   ansible-playbook playbooks/remediation/remediate_disk_full.yml \
+#     -e "target_hosts=web_servers" \
+#     -e "target_mount=/" \
+#     -e "correlation_id=abc-123"
+
+- name: "Remediate Disk Full (21 CFR Part 11 Audited)"
+  hosts: "{{ target_hosts | default('managed_hosts') }}"
+  become: true
+  gather_facts: true
+
+  vars:
+    correlation_id: "{{ correlation_id | default(ansible_date_time.iso8601_micro | to_uuid) }}"
+    target_mount: "{{ target_mount | default('/') }}"
+    disk_critical_threshold: 90
+    log_retention_days: 7
+    tmp_max_age_days: 3
+    journal_vacuum_size: "500M"
+
+  tasks:
+    # ---------------------------------------------------------------
+    # STEP 1: Audit log -- remediation start
+    # ---------------------------------------------------------------
+    - name: "AUDIT: Log remediation start"
+      include_role:
+        name: audit_log
+      vars:
+        audit_action: "disk_full_remediation_start"
+        audit_action_category: "remediation"
+        audit_change_description: "Initiating disk full remediation on {{ inventory_hostname }} for mount {{ target_mount }}"
+        audit_result: "in_progress"
+
+    # ---------------------------------------------------------------
+    # STEP 2: Gather current disk state
+    # ---------------------------------------------------------------
+    - name: Capture current disk usage for target mount
+      shell: "df -h {{ target_mount }} | awk 'NR==2 {print $5}' | tr -d '%'"
+      register: initial_disk_usage
+      changed_when: false
+
+    - name: Capture disk usage details
+      shell: "df -h {{ target_mount }}"
+      register: disk_details
+      changed_when: false
+
+    - name: Set initial disk state fact
+      set_fact:
+        initial_disk_pct: "{{ initial_disk_usage.stdout | int }}"
+
+    - name: Display current disk state
+      debug:
+        msg: >
+          Host: {{ inventory_hostname }}
+          Mount: {{ target_mount }}
+          Disk usage: {{ initial_disk_pct }}%
+          Details: {{ disk_details.stdout }}
+
+    # ---------------------------------------------------------------
+    # STEP 3: Clean temporary files
+    # ---------------------------------------------------------------
+    - name: "AUDIT: Log temp file cleanup"
+      include_role:
+        name: audit_log
+      vars:
+        audit_action: "disk_cleanup_temp_files"
+        audit_action_category: "remediation"
+        audit_change_description: "Cleaning temporary files older than {{ tmp_max_age_days }} days"
+        audit_previous_state: "disk_usage={{ initial_disk_pct }}%"
+
+    - name: Find and remove old temporary files in /tmp
+      shell: "find /tmp -type f -atime +{{ tmp_max_age_days }} -delete 2>/dev/null; echo 'done'"
+      register: tmp_cleanup
+      changed_when: false
+
+    - name: Find and remove old temporary files in /var/tmp
+      shell: "find /var/tmp -type f -atime +{{ tmp_max_age_days }} -delete 2>/dev/null; echo 'done'"
+      register: var_tmp_cleanup
+      changed_when: false
+
+    # ---------------------------------------------------------------
+    # STEP 4: Clean old log files
+    # ---------------------------------------------------------------
+    - name: "AUDIT: Log old log cleanup"
+      include_role:
+        name: audit_log
+      vars:
+        audit_action: "disk_cleanup_old_logs"
+        audit_action_category: "remediation"
+        audit_change_description: "Cleaning rotated log files older than {{ log_retention_days }} days"
+
+    - name: Remove rotated/compressed log files older than retention period
+      shell: "find /var/log -name '*.gz' -mtime +{{ log_retention_days }} -delete 2>/dev/null; echo 'done'"
+      register: gz_log_cleanup
+      changed_when: false
+
+    - name: Remove old rotated log files (numbered rotations)
+      shell: "find /var/log -regex '.*\\.[0-9]+$' -mtime +{{ log_retention_days }} -delete 2>/dev/null; echo 'done'"
+      register: rotated_log_cleanup
+      changed_when: false
+
+    # ---------------------------------------------------------------
+    # STEP 5: Vacuum systemd journal
+    # ---------------------------------------------------------------
+    - name: "AUDIT: Log journal vacuum"
+      include_role:
+        name: audit_log
+      vars:
+        audit_action: "disk_cleanup_journal_vacuum"
+        audit_action_category: "remediation"
+        audit_change_description: "Vacuuming systemd journal to {{ journal_vacuum_size }}"
+
+    - name: Vacuum systemd journal
+      shell: "journalctl --vacuum-size={{ journal_vacuum_size }}"
+      register: journal_vacuum_result
+      changed_when: "'Vacuuming done' in journal_vacuum_result.stdout or 'freed' in journal_vacuum_result.stdout"
+      failed_when: false
+
+    # ---------------------------------------------------------------
+    # STEP 6: Clean package manager cache
+    # ---------------------------------------------------------------
+    - name: "AUDIT: Log package cache cleanup"
+      include_role:
+        name: audit_log
+      vars:
+        audit_action: "disk_cleanup_package_cache"
+        audit_action_category: "remediation"
+        audit_change_description: "Cleaning package manager cache"
+
+    - name: Clean yum/dnf cache (RHEL-based)
+      shell: "yum clean all 2>/dev/null || dnf clean all 2>/dev/null || true"
+      changed_when: false
+      when: ansible_os_family == "RedHat"
+
+    - name: Clean apt cache (Debian-based)
+      shell: "apt-get clean 2>/dev/null || true"
+      changed_when: false
+      when: ansible_os_family == "Debian"
+
+    # ---------------------------------------------------------------
+    # STEP 7: Verify disk usage decreased
+    # ---------------------------------------------------------------
+    - name: Check disk usage after cleanup
+      shell: "df -h {{ target_mount }} | awk 'NR==2 {print $5}' | tr -d '%'"
+      register: final_disk_usage
+      changed_when: false
+
+    - name: Set final disk state fact
+      set_fact:
+        final_disk_pct: "{{ final_disk_usage.stdout | int }}"
+
+    - name: Display remediation summary
+      debug:
+        msg: >
+          Disk remediation complete on {{ inventory_hostname }}.
+          Mount: {{ target_mount }}
+          Disk usage: {{ initial_disk_pct }}% -> {{ final_disk_pct }}%
+          Freed approximately {{ initial_disk_pct | int - final_disk_pct | int }}% disk space.
+
+    - name: Warn if disk usage is still critical
+      debug:
+        msg: >
+          WARNING: Disk usage on {{ inventory_hostname }}:{{ target_mount }} is still at {{ final_disk_pct }}%.
+          Manual intervention may be required. Consider expanding the volume or
+          identifying large files with: du -sh /* | sort -rh | head -20
+      when: final_disk_pct | int >= disk_critical_threshold
+
+    # ---------------------------------------------------------------
+    # STEP 8: Audit log -- remediation complete
+    # ---------------------------------------------------------------
+    - name: "AUDIT: Log remediation complete"
+      include_role:
+        name: audit_log
+      vars:
+        audit_action: "disk_full_remediation_complete"
+        audit_action_category: "remediation"
+        audit_change_description: >-
+          Disk full remediation completed on {{ inventory_hostname }}:{{ target_mount }}.
+          Cleaned temp files, old logs, journal, and package cache.
+        audit_previous_state: "disk_usage={{ initial_disk_pct }}%"
+        audit_new_state: "disk_usage={{ final_disk_pct }}%"
+        audit_result: "{{ 'success' if (final_disk_pct | int) < (initial_disk_pct | int) else 'partial' }}"

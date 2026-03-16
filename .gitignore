@@ -1,0 +1,28 @@
+# Environment and secrets
+.env
+env/.env
+
+# Ansible
+*.retry
+vault_password
+.vault_pass
+*.vault
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+*.egg-info/
+
+# Collections (installed via requirements)
+collections/ansible_collections/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/

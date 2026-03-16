@@ -1,0 +1,195 @@
+---
+# remediate_high_cpu.yml
+# Automated remediation for high CPU usage alerts.
+# Maintains full 21 CFR Part 11 audit trail throughout execution.
+#
+# Usage:
+#   ansible-playbook playbooks/remediation/remediate_high_cpu.yml \
+#     -e "target_hosts=web_servers" \
+#     -e "correlation_id=abc-123"
+
+- name: "Remediate High CPU Usage (21 CFR Part 11 Audited)"
+  hosts: "{{ target_hosts | default('managed_hosts') }}"
+  become: true
+  gather_facts: true
+
+  vars:
+    correlation_id: "{{ correlation_id | default(ansible_date_time.iso8601_micro | to_uuid) }}"
+    cpu_threshold: 85
+    renice_value: 19
+    wait_seconds: 30
+    protected_processes:
+      - systemd
+      - sshd
+      - auditd
+      - elastic-agent
+      - filebeat
+      - metricbeat
+
+  tasks:
+    # ---------------------------------------------------------------
+    # STEP 1: Audit log -- remediation start
+    # ---------------------------------------------------------------
+    - name: "AUDIT: Log remediation start"
+      include_role:
+        name: audit_log
+      vars:
+        audit_action: "high_cpu_remediation_start"
+        audit_action_category: "remediation"
+        audit_change_description: "Initiating high CPU remediation on {{ inventory_hostname }}"
+        audit_result: "in_progress"
+
+    # ---------------------------------------------------------------
+    # STEP 2: Gather current CPU state
+    # ---------------------------------------------------------------
+    - name: Capture current CPU load average
+      shell: cat /proc/loadavg | awk '{print $1}'
+      register: initial_load
+      changed_when: false
+
+    - name: Capture top 20 processes by CPU usage
+      shell: ps aux --sort=-%cpu | head -20
+      register: top_processes
+      changed_when: false
+
+    - name: Set initial CPU state fact
+      set_fact:
+        initial_cpu_load: "{{ initial_load.stdout }}"
+        top_cpu_process_line: "{{ top_processes.stdout_lines[1] | default('none') }}"
+
+    - name: Identify the top CPU consuming process
+      shell: ps aux --sort=-%cpu | awk 'NR==2 {print $2, $3, $11}'
+      register: top_cpu_info
+      changed_when: false
+
+    - name: Parse top CPU consumer details
+      set_fact:
+        top_pid: "{{ top_cpu_info.stdout.split()[0] | default('0') }}"
+        top_cpu_pct: "{{ top_cpu_info.stdout.split()[1] | default('0') }}"
+        top_process_name: "{{ top_cpu_info.stdout.split()[2] | default('unknown') | basename }}"
+
+    - name: Display current CPU state
+      debug:
+        msg: >
+          Host: {{ inventory_hostname }}
+          Load average: {{ initial_cpu_load }}
+          Top process: {{ top_process_name }} (PID {{ top_pid }}) at {{ top_cpu_pct }}% CPU
+
+    # ---------------------------------------------------------------
+    # STEP 3: Attempt graceful remediation (renice)
+    # ---------------------------------------------------------------
+    - name: Check if top process is a protected system process
+      set_fact:
+        process_is_protected: "{{ top_process_name in protected_processes }}"
+
+    - name: "AUDIT: Log renice attempt"
+      include_role:
+        name: audit_log
+      vars:
+        audit_action: "high_cpu_renice_attempt"
+        audit_action_category: "remediation"
+        audit_change_description: "Renicing process {{ top_process_name }} (PID {{ top_pid }}) to priority {{ renice_value }}"
+        audit_target_service: "{{ top_process_name }}"
+        audit_previous_state: "CPU {{ top_cpu_pct }}%"
+
+    - name: Renice the top CPU consuming process
+      shell: "renice {{ renice_value }} -p {{ top_pid }}"
+      register: renice_result
+      failed_when: false
+      when: top_pid != '0'
+
+    - name: Attempt to restart known service if applicable
+      systemd:
+        name: "{{ top_process_name }}"
+        state: restarted
+      register: service_restart_result
+      failed_when: false
+      when:
+        - not process_is_protected
+        - top_cpu_pct | float > cpu_threshold
+
+    # ---------------------------------------------------------------
+    # STEP 4: Wait and re-evaluate
+    # ---------------------------------------------------------------
+    - name: "Wait {{ wait_seconds }}s for CPU to stabilize"
+      pause:
+        seconds: "{{ wait_seconds }}"
+
+    - name: Check CPU load after initial remediation
+      shell: cat /proc/loadavg | awk '{print $1}'
+      register: mid_load
+      changed_when: false
+
+    - name: Get current top CPU consumer after remediation
+      shell: ps aux --sort=-%cpu | awk 'NR==2 {print $2, $3, $11}'
+      register: mid_cpu_info
+      changed_when: false
+
+    # ---------------------------------------------------------------
+    # STEP 5: Escalate if CPU still high
+    # ---------------------------------------------------------------
+    - name: Escalate -- kill runaway process if CPU still critical
+      block:
+        - name: "AUDIT: Log escalation -- process kill"
+          include_role:
+            name: audit_log
+          vars:
+            audit_action: "high_cpu_escalation_kill"
+            audit_action_category: "remediation"
+            audit_change_description: "Escalation: killing process {{ top_process_name }} (PID {{ top_pid }}) -- CPU still at {{ mid_cpu_info.stdout.split()[1] | default('unknown') }}%"
+            audit_target_service: "{{ top_process_name }}"
+            audit_result: "in_progress"
+
+        - name: Send SIGTERM to runaway process
+          shell: "kill -15 {{ top_pid }}"
+          register: kill_result
+          failed_when: false
+          when: not process_is_protected
+
+        - name: Wait for process to terminate gracefully
+          pause:
+            seconds: 10
+
+        - name: Force kill if process still running
+          shell: "kill -9 {{ top_pid }} 2>/dev/null || true"
+          when: not process_is_protected
+          changed_when: false
+
+      when:
+        - mid_load.stdout | float > (ansible_processor_vcpus | default(2) | float * 0.85)
+        - not process_is_protected
+
+    # ---------------------------------------------------------------
+    # STEP 6: Final verification
+    # ---------------------------------------------------------------
+    - name: Final CPU load check
+      shell: cat /proc/loadavg | awk '{print $1}'
+      register: final_load
+      changed_when: false
+
+    - name: Set final CPU state
+      set_fact:
+        final_cpu_load: "{{ final_load.stdout }}"
+
+    - name: Display remediation summary
+      debug:
+        msg: >
+          Remediation complete on {{ inventory_hostname }}.
+          CPU load: {{ initial_cpu_load }} -> {{ final_cpu_load }}
+          Top offender was: {{ top_process_name }} (PID {{ top_pid }}) at {{ top_cpu_pct }}% CPU
+
+    # ---------------------------------------------------------------
+    # STEP 7: Audit log -- remediation complete
+    # ---------------------------------------------------------------
+    - name: "AUDIT: Log remediation complete"
+      include_role:
+        name: audit_log
+      vars:
+        audit_action: "high_cpu_remediation_complete"
+        audit_action_category: "remediation"
+        audit_change_description: >-
+          High CPU remediation completed on {{ inventory_hostname }}.
+          Top process was {{ top_process_name }} (PID {{ top_pid }}).
+        audit_previous_state: "load_avg={{ initial_cpu_load }}, top_cpu={{ top_cpu_pct }}%"
+        audit_new_state: "load_avg={{ final_cpu_load }}"
+        audit_result: "success"

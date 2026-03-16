@@ -1,0 +1,118 @@
+---
+# audit_log/tasks/main.yml
+# Writes a 21 CFR Part 11 compliant audit document to Elasticsearch.
+# CRITICAL: If the audit write fails, the entire playbook MUST fail.
+# No automated action may proceed without a verifiable audit trail.
+
+- name: Build 21 CFR Part 11 audit document
+  set_fact:
+    audit_document:
+      "@timestamp": "{{ ansible_date_time.iso8601 }}"
+      event:
+        kind: "event"
+        category: "{{ audit_action_category }}"
+        action: "{{ audit_action }}"
+        outcome: "{{ audit_result }}"
+      host:
+        name: "{{ audit_target_host }}"
+        hostname: "{{ audit_target_host }}"
+      service:
+        name: "{{ audit_target_service }}"
+      user:
+        name: "{{ ansible_user_id | default('ansible') }}"
+        id: "{{ ansible_user_uid | default('N/A') }}"
+      labels:
+        correlation_id: "{{ audit_correlation_id }}"
+        fda_system_name: "{{ audit_fda_system_name }}"
+        fda_facility_id: "{{ audit_fda_facility_id }}"
+        cfr_part_11_compliant: true
+        audit_version: "1.0"
+      change:
+        description: "{{ audit_change_description }}"
+        previous_state: "{{ audit_previous_state }}"
+        new_state: "{{ audit_new_state }}"
+      ansible:
+        playbook: "{{ ansible_play_name | default('unknown') }}"
+        task: "{{ audit_action }}"
+        controller: "{{ ansible_controller_host | default(inventory_hostname) }}"
+        execution_id: "{{ audit_correlation_id }}"
+      message: >-
+        [{{ audit_action_category | upper }}] {{ audit_action }}
+        on {{ audit_target_host }}
+        {% if audit_target_service %}(service: {{ audit_target_service }}){% endif %}
+        - {{ audit_result }}
+        {% if audit_change_description %}: {{ audit_change_description }}{% endif %}
+
+- name: Determine Elasticsearch auth header
+  set_fact:
+    _audit_auth_header: >-
+      {%- if elastic_api_key is defined and elastic_api_key | length > 0 -%}
+      ApiKey {{ elastic_api_key }}
+      {%- else -%}
+      Basic {{ ('elastic:' + elastic_password) | b64encode }}
+      {%- endif -%}
+  no_log: true
+
+- name: Write audit document to Elasticsearch
+  block:
+    - name: POST audit document to Elasticsearch
+      uri:
+        url: "{{ audit_elasticsearch_host }}:{{ audit_elasticsearch_port }}/{{ audit_index }}-{{ ansible_date_time.date }}/_doc"
+        method: POST
+        headers:
+          Authorization: "{{ _audit_auth_header }}"
+          Content-Type: "application/json"
+        body: "{{ audit_document | to_json }}"
+        body_format: json
+        status_code: [200, 201]
+        validate_certs: false
+        timeout: 30
+      register: audit_write_result
+      failed_when: audit_write_result.status not in [200, 201]
+
+    - name: Assert audit document was created
+      assert:
+        that:
+          - audit_write_result.status == 201 or audit_write_result.status == 200
+          - audit_write_result.json._id is defined
+        fail_msg: "Audit document was not created successfully. Response: {{ audit_write_result }}"
+        success_msg: "Audit document {{ audit_write_result.json._id }} written to {{ audit_index }}-{{ ansible_date_time.date }}"
+
+  rescue:
+    - name: "RETRY: Wait before retrying audit write"
+      pause:
+        seconds: 5
+
+    - name: "RETRY: POST audit document to Elasticsearch (attempt 2)"
+      uri:
+        url: "{{ audit_elasticsearch_host }}:{{ audit_elasticsearch_port }}/{{ audit_index }}-{{ ansible_date_time.date }}/_doc"
+        method: POST
+        headers:
+          Authorization: "{{ _audit_auth_header }}"
+          Content-Type: "application/json"
+        body: "{{ audit_document | to_json }}"
+        body_format: json
+        status_code: [200, 201]
+        validate_certs: false
+        timeout: 30
+      register: audit_retry_result
+      failed_when: audit_retry_result.status not in [200, 201]
+
+    - name: "RETRY: Assert audit document was created on retry"
+      assert:
+        that:
+          - audit_retry_result.status == 201 or audit_retry_result.status == 200
+        fail_msg: >-
+          AUDIT WRITE FAILED - Action cannot proceed without audit trail per 21 CFR Part 11.
+          Elasticsearch responded with status {{ audit_retry_result.status | default('UNREACHABLE') }}.
+          Correlation ID: {{ audit_correlation_id }}.
+          This failure is intentional -- no remediation action may execute without a verified audit record.
+
+    - name: "FATAL: Fail hard if retry also failed"
+      fail:
+        msg: >-
+          AUDIT WRITE FAILED - Action cannot proceed without audit trail per 21 CFR Part 11.
+          Both primary and retry attempts to write audit document failed.
+          Correlation ID: {{ audit_correlation_id }}.
+          Manual intervention required.
+      when: audit_retry_result.status is not defined or audit_retry_result.status not in [200, 201]

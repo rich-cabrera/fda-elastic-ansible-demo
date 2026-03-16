@@ -1,0 +1,61 @@
+---
+# deploy_elastic_agent.yml - Deploy Elastic Agent to managed hosts
+#
+# Usage:
+#   ansible-playbook playbooks/deployment/deploy_elastic_agent.yml \
+#     -e fleet_url=https://fleet.example.com:8220 \
+#     -e fleet_enrollment_token=<token>
+
+- name: Deploy Elastic Agent to managed hosts
+  hosts: managed_hosts
+  become: true
+  gather_facts: true
+
+  pre_tasks:
+    - name: Log deployment start to audit trail
+      ansible.builtin.uri:
+        url: "{{ elasticsearch_url }}/fda-audit-trail-ansible/_doc"
+        method: POST
+        body_format: json
+        body:
+          "@timestamp": "{{ ansible_date_time.iso8601 }}"
+          event.action: "elastic_agent_deployment_started"
+          event.outcome: "pending"
+          host.name: "{{ inventory_hostname }}"
+          agent.version: "{{ elastic_agent_version | default('8.17.0') }}"
+          labels.managed_by: "ansible"
+          labels.playbook: "deploy_elastic_agent"
+        headers:
+          Content-Type: "application/json"
+          Authorization: "ApiKey {{ elasticsearch_api_key }}"
+        validate_certs: "{{ elasticsearch_validate_certs | default(true) }}"
+        status_code: [200, 201]
+      ignore_errors: true
+      tags:
+        - audit
+
+  roles:
+    - role: elastic_agent
+
+  post_tasks:
+    - name: Log deployment completion to audit trail
+      ansible.builtin.uri:
+        url: "{{ elasticsearch_url }}/fda-audit-trail-ansible/_doc"
+        method: POST
+        body_format: json
+        body:
+          "@timestamp": "{{ ansible_date_time.iso8601 }}"
+          event.action: "elastic_agent_deployment_completed"
+          event.outcome: "success"
+          host.name: "{{ inventory_hostname }}"
+          agent.version: "{{ elastic_agent_version | default('8.17.0') }}"
+          labels.managed_by: "ansible"
+          labels.playbook: "deploy_elastic_agent"
+        headers:
+          Content-Type: "application/json"
+          Authorization: "ApiKey {{ elasticsearch_api_key }}"
+        validate_certs: "{{ elasticsearch_validate_certs | default(true) }}"
+        status_code: [200, 201]
+      ignore_errors: true
+      tags:
+        - audit

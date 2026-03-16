@@ -1,0 +1,46 @@
+{
+  "policy": {
+    "phases": {
+      "hot": {
+        "min_age": "0ms",
+        "actions": {
+          "rollover": {
+            "max_primary_shard_size": "50gb",
+            "max_age": "30d"
+          },
+          "set_priority": {
+            "priority": 100
+          }
+        }
+      },
+      "warm": {
+        "min_age": "30d",
+        "actions": {
+          "shrink": {
+            "number_of_shards": 1
+          },
+          "forcemerge": {
+            "max_num_segments": 1
+          },
+          "set_priority": {
+            "priority": 50
+          }
+        }
+      },
+      "cold": {
+        "min_age": "90d",
+        "actions": {
+          "freeze": {},
+          "set_priority": {
+            "priority": 0
+          }
+        }
+      }
+    },
+    "_meta": {
+      "description": "FDA audit retention policy - NO delete phase per 21 CFR Part 11 (7+ year retention requirement)",
+      "compliance": "21 CFR Part 11",
+      "managed_by": "fda-demo-ansible"
+    }
+  }
+}

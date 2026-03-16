@@ -1,0 +1,34 @@
+{
+  "name": "FDA - Service Down",
+  "rule_type_id": ".es-query",
+  "consumer": "infrastructure",
+  "enabled": true,
+  "params": {
+    "index": ["metrics-system.process-*"],
+    "timeField": "@timestamp",
+    "esQuery": "{\"bool\": {\"must_not\": [{\"exists\": {\"field\": \"process.name\"}}], \"filter\": [{\"range\": {\"@timestamp\": {\"gte\": \"now-5m\"}}}]}}",
+    "threshold": [0],
+    "thresholdComparator": "<=",
+    "timeWindowSize": 5,
+    "timeWindowUnit": "m",
+    "size": 100,
+    "aggType": "count",
+    "groupBy": "top",
+    "termField": "host.name",
+    "termSize": 100
+  },
+  "schedule": {
+    "interval": "{{ item.schedule_interval | default('1m') }}"
+  },
+  "tags": {{ item.tags | default(["fda", "infrastructure", "service", "eda-enabled"]) | to_json }},
+  "notify_when": "onActionGroupChange",
+  "actions": [
+    {
+      "group": "query matched",
+      "id": "{{ connector_id }}",
+      "params": {
+        "body": "{\"alert_name\": \"FDA - Service Down\", \"alert_id\": \"{% raw %}{{rule.id}}{% endraw %}\", \"host\": \"{% raw %}{{context.hits[0]._source.host.name}}{% endraw %}\", \"query_match_count\": \"{% raw %}{{context.value}}{% endraw %}\", \"severity\": \"critical\", \"timestamp\": \"{% raw %}{{date}}{% endraw %}\", \"source\": \"elastic-observability\", \"action_required\": \"restart_service\"}"
+      }
+    }
+  ]
+}

@@ -1,0 +1,66 @@
+---
+# cleanup_simulations.yml
+# Cleans up all simulation artifacts and restores system to normal state
+# Usage: ansible-playbook playbooks/simulation/cleanup_simulations.yml
+
+- name: Cleanup All Simulations
+  hosts: "{{ target_hosts | default('managed_hosts') }}"
+  become: true
+
+  tasks:
+    - name: Kill any remaining stress-ng processes
+      ansible.builtin.shell: pkill -f stress-ng || true
+      changed_when: false
+
+    - name: Remove disk fill simulation file
+      ansible.builtin.file:
+        path: /tmp/disk_fill_simulation
+        state: absent
+
+    - name: Restart nginx if stopped
+      ansible.builtin.systemd:
+        name: nginx
+        state: started
+        enabled: true
+      ignore_errors: true
+
+    - name: Restart any other commonly simulated services
+      ansible.builtin.systemd:
+        name: "{{ item }}"
+        state: started
+      loop:
+        - nginx
+      ignore_errors: true
+
+    - name: Log cleanup to audit trail
+      ansible.builtin.include_role:
+        name: audit_log
+      vars:
+        action: "simulation_cleanup"
+        category: "testing"
+        details: "All simulation artifacts cleaned up on {{ inventory_hostname }}"
+
+    - name: Verify system health - check CPU load
+      ansible.builtin.command: uptime
+      register: uptime_result
+      changed_when: false
+
+    - name: Verify system health - check disk usage
+      ansible.builtin.command: df -h /
+      register: disk_result
+      changed_when: false
+
+    - name: Verify system health - check running services
+      ansible.builtin.command: systemctl is-active nginx
+      register: nginx_status
+      changed_when: false
+      ignore_errors: true
+
+    - name: Display system health summary
+      ansible.builtin.debug:
+        msg:
+          - "=== Post-Cleanup System Health ==="
+          - "Uptime: {{ uptime_result.stdout }}"
+          - "Disk: {{ disk_result.stdout_lines }}"
+          - "Nginx: {{ nginx_status.stdout | default('not installed') }}"
+          - "=== Cleanup Complete ==="

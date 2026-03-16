@@ -1,0 +1,29 @@
+---
+galaxy_info:
+  role_name: audit_log
+  author: Rich Cabrera
+  description: >
+    21 CFR Part 11 compliant audit logging role. Writes structured audit
+    documents to Elasticsearch for every remediation action. Ensures that
+    no automated change can proceed without a verifiable audit trail.
+  company: Elastic
+  license: proprietary
+  min_ansible_version: "2.14"
+  platforms:
+    - name: EL
+      versions:
+        - "8"
+        - "9"
+    - name: Ubuntu
+      versions:
+        - focal
+        - jammy
+  galaxy_tags:
+    - audit
+    - compliance
+    - fda
+    - 21cfr11
+    - elasticsearch
+    - observability
+
+dependencies: []

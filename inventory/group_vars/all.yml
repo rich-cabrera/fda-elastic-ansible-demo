@@ -1,0 +1,58 @@
+---
+# =============================================================================
+# FDA Demo - Elastic Observability + Ansible Integration
+# Global Variables
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# Elastic Cloud Connection
+# ---------------------------------------------------------------------------
+elastic_cloud_id: "{{ lookup('env', 'ELASTIC_CLOUD_ID') }}"
+elasticsearch_host: "{{ lookup('env', 'ELASTICSEARCH_HOST') }}"
+kibana_host: "{{ lookup('env', 'KIBANA_HOST') }}"
+elastic_port: 443
+kibana_port: 443
+elastic_scheme: https
+
+# Secrets (sourced from environment variables)
+elastic_password: "{{ lookup('env', 'ELASTIC_PASSWORD') }}"
+elastic_api_key: "{{ lookup('env', 'ELASTIC_API_KEY') }}"
+kibana_user: "{{ lookup('env', 'KIBANA_USER') }}"
+kibana_password: "{{ lookup('env', 'KIBANA_PASSWORD') }}"
+
+# ---------------------------------------------------------------------------
+# Elasticsearch Index Configuration
+# ---------------------------------------------------------------------------
+elasticsearch_index_prefix: fda-demo
+audit_index: "{{ elasticsearch_index_prefix }}-audit-trail"
+ansible_executions_index: "{{ elasticsearch_index_prefix }}-ansible-executions"
+eda_events_index: "{{ elasticsearch_index_prefix }}-eda-events"
+
+# ---------------------------------------------------------------------------
+# Elastic Agent / Fleet
+# ---------------------------------------------------------------------------
+elastic_agent_version: "8.17.0"
+fleet_enrollment_token: "{{ lookup('env', 'FLEET_ENROLLMENT_TOKEN') }}"
+fleet_url: "{{ lookup('env', 'FLEET_URL') }}"
+
+# ---------------------------------------------------------------------------
+# Ansible Automation Platform (AAP)
+# ---------------------------------------------------------------------------
+aap_api_key: "{{ lookup('env', 'AAP_API_KEY') }}"
+
+# ---------------------------------------------------------------------------
+# Event-Driven Ansible (EDA)
+# ---------------------------------------------------------------------------
+eda_webhook_port: 5000
+
+# ---------------------------------------------------------------------------
+# FDA-Specific Configuration
+# ---------------------------------------------------------------------------
+fda_system_name: "FDA CDER Regulatory Systems"
+fda_facility_id: "{{ lookup('env', 'FDA_FACILITY_ID') }}"
+
+# ---------------------------------------------------------------------------
+# Compliance & Retention
+# ---------------------------------------------------------------------------
+# 7-year retention per 21 CFR Part 11
+compliance_retention_days: 2555

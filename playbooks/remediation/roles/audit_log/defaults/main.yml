@@ -1,0 +1,24 @@
+---
+# audit_log role defaults
+# Provides 21 CFR Part 11 compliant audit logging to Elasticsearch
+
+audit_elasticsearch_host: "{{ elasticsearch_host }}"
+audit_elasticsearch_port: "{{ elastic_port | default(9200) }}"
+audit_index: "{{ audit_index | default('fda-demo-audit-trail') }}"
+
+# Action metadata
+audit_action: "unknown"
+audit_action_category: "unknown"
+audit_target_host: "{{ inventory_hostname }}"
+audit_target_service: ""
+audit_change_description: ""
+audit_previous_state: ""
+audit_new_state: ""
+audit_result: "success"
+
+# Correlation and traceability
+audit_correlation_id: "{{ correlation_id | default(ansible_date_time.iso8601_micro | to_uuid) }}"
+
+# FDA-specific fields
+audit_fda_system_name: "{{ fda_system_name }}"
+audit_fda_facility_id: "{{ fda_facility_id | default('UNKNOWN') }}"

@@ -1,0 +1,9 @@
+---
+# handlers/main.yml - Elastic Agent handlers
+
+- name: Restart elastic-agent
+  ansible.builtin.systemd:
+    name: elastic-agent
+    state: restarted
+    daemon_reload: true
+  listen: "restart elastic-agent"

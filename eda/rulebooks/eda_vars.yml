@@ -1,0 +1,24 @@
+---
+# Common variables for EDA rulebooks
+#
+# Pass this file to ansible-rulebook with --vars:
+#   ansible-rulebook --rulebook <rulebook>.yml --vars eda/rulebooks/eda_vars.yml
+
+# Port the webhook source listens on
+eda_webhook_port: 5000
+
+# Throttle window in seconds - prevents the same alert from re-triggering
+# remediation within this period
+throttle_window_seconds: 300
+
+# Base path for remediation playbooks (informational; playbooks reference
+# full relative paths directly)
+remediation_playbook_path: playbooks/remediation/
+
+# Notification settings (consumed by notification playbooks)
+notification_enabled: true
+notification_channel: "#fda-alerts"
+
+# Correlation settings
+correlation_window_seconds: 300
+escalation_enabled: true

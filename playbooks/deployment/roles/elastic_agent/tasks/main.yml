@@ -1,0 +1,98 @@
+---
+# tasks/main.yml - Elastic Agent deployment
+
+- name: Check if elastic-agent is already installed
+  ansible.builtin.stat:
+    path: "{{ elastic_agent_install_dir }}/elastic-agent"
+  register: agent_installed
+  tags:
+    - elastic_agent
+    - preflight
+
+- name: Deploy Elastic Agent
+  when: not agent_installed.stat.exists or elastic_agent_force_reinstall
+  tags:
+    - elastic_agent
+    - install
+  block:
+    - name: Download elastic-agent tarball
+      ansible.builtin.get_url:
+        url: "{{ elastic_agent_download_url }}"
+        dest: "{{ elastic_agent_download_dir }}/elastic-agent-{{ elastic_agent_version }}-linux-x86_64.tar.gz"
+        mode: "0644"
+      register: download_result
+
+    - name: Create extraction directory
+      ansible.builtin.file:
+        path: "{{ elastic_agent_download_dir }}/elastic-agent-{{ elastic_agent_version }}-linux-x86_64"
+        state: directory
+        mode: "0755"
+
+    - name: Extract elastic-agent tarball
+      ansible.builtin.unarchive:
+        src: "{{ elastic_agent_download_dir }}/elastic-agent-{{ elastic_agent_version }}-linux-x86_64.tar.gz"
+        dest: "{{ elastic_agent_download_dir }}"
+        remote_src: true
+      register: extract_result
+
+    - name: Install elastic-agent with Fleet enrollment
+      ansible.builtin.command:
+        cmd: >-
+          {{ elastic_agent_download_dir }}/elastic-agent-{{ elastic_agent_version }}-linux-x86_64/elastic-agent install
+          --url={{ fleet_url }}
+          --enrollment-token={{ fleet_enrollment_token }}
+          --non-interactive
+          --force
+      register: install_result
+      changed_when: "'successfully' in install_result.stdout"
+
+    - name: Verify elastic-agent enrollment
+      ansible.builtin.command:
+        cmd: "{{ elastic_agent_install_dir }}/elastic-agent status"
+      register: agent_status
+      changed_when: false
+      retries: 5
+      delay: 10
+      until: agent_status.rc == 0
+      tags:
+        - verify
+
+    - name: Log successful deployment
+      ansible.builtin.debug:
+        msg: "Elastic Agent {{ elastic_agent_version }} deployed successfully on {{ inventory_hostname }}"
+
+  rescue:
+    - name: Log deployment failure to audit trail
+      ansible.builtin.uri:
+        url: "{{ elasticsearch_url }}/fda-audit-trail-ansible/_doc"
+        method: POST
+        body_format: json
+        body:
+          "@timestamp": "{{ ansible_date_time.iso8601 }}"
+          event.action: "elastic_agent_deployment_failed"
+          event.outcome: "failure"
+          host.name: "{{ inventory_hostname }}"
+          error.message: "{{ ansible_failed_result.msg | default('Unknown error during Elastic Agent deployment') }}"
+          agent.version: "{{ elastic_agent_version }}"
+          labels.managed_by: "ansible"
+        headers:
+          Content-Type: "application/json"
+          Authorization: "ApiKey {{ elasticsearch_api_key }}"
+        validate_certs: "{{ elasticsearch_validate_certs | default(true) }}"
+        status_code: [200, 201]
+      ignore_errors: true
+      tags:
+        - audit
+
+    - name: Fail with deployment error
+      ansible.builtin.fail:
+        msg: "Elastic Agent deployment failed on {{ inventory_hostname }}. Check audit trail for details."
+
+- name: Clean up downloaded tarball
+  ansible.builtin.file:
+    path: "{{ elastic_agent_download_dir }}/elastic-agent-{{ elastic_agent_version }}-linux-x86_64.tar.gz"
+    state: absent
+  when: download_result is defined and download_result is succeeded
+  tags:
+    - elastic_agent
+    - cleanup

@@ -1,0 +1,95 @@
+---
+# configure_webhook_connector.yml - Create Kibana webhook connector for EDA
+#
+# Usage:
+#   ansible-playbook playbooks/configuration/configure_webhook_connector.yml
+
+- name: Configure Kibana webhook connector for Event-Driven Ansible
+  hosts: localhost
+  connection: local
+  gather_facts: true
+
+  vars:
+    _kibana_url: "{{ kibana_host }}"
+    _eda_webhook_url: "http://{{ ansible_default_ipv4.address | default('localhost') }}:{{ eda_webhook_port }}/api/v1/webhook"
+    connector_name: "EDA Webhook Connector"
+    eda_webhook_secret: "{{ lookup('env', 'EDA_WEBHOOK_SECRET') }}"
+
+  tasks:
+    - name: Check if webhook connector already exists
+      ansible.builtin.uri:
+        url: "{{ _kibana_url }}/api/actions/connectors"
+        method: GET
+        headers:
+          kbn-xsrf: "true"
+          Authorization: "Basic {{ (kibana_user + ':' + kibana_password) | b64encode }}"
+        validate_certs: true
+        status_code: [200]
+      register: existing_connectors
+      tags: [webhook, preflight]
+
+    - name: Find existing EDA webhook connector
+      ansible.builtin.set_fact:
+        existing_connector: "{{ existing_connectors.json | selectattr('name', 'equalto', connector_name) | list | first | default(None) }}"
+      tags: [webhook]
+
+    - name: Create Kibana webhook connector
+      ansible.builtin.uri:
+        url: "{{ _kibana_url }}/api/actions/connector"
+        method: POST
+        body_format: json
+        body:
+          name: "{{ connector_name }}"
+          connector_type_id: ".webhook"
+          config:
+            url: "{{ _eda_webhook_url }}"
+            method: "post"
+            hasAuth: false
+            headers:
+              Content-Type: "application/json"
+          secrets: {}
+        headers:
+          kbn-xsrf: "true"
+          Authorization: "Basic {{ (kibana_user + ':' + kibana_password) | b64encode }}"
+        validate_certs: true
+        status_code: [200, 201]
+      register: connector_result
+      when: existing_connector is none or existing_connector == None
+      tags: [webhook, configure]
+
+    - name: Set connector_id fact
+      ansible.builtin.set_fact:
+        connector_id: "{{ existing_connector.id if (existing_connector is not none and existing_connector != None) else connector_result.json.id }}"
+      tags: [webhook]
+
+    - name: Display connector ID
+      ansible.builtin.debug:
+        msg: "Webhook connector ID: {{ connector_id }}"
+      tags: [webhook]
+
+    - name: Log webhook connector creation to audit trail
+      ansible.builtin.uri:
+        url: "{{ elasticsearch_host }}/fda-demo-audit-trail/_doc"
+        method: POST
+        body_format: json
+        body:
+          "@timestamp": "{{ ansible_date_time.iso8601 }}"
+          event_type: "configuration"
+          action: "webhook_connector_configured"
+          action_category: "configuration"
+          actor: "ansible"
+          actor_type: "automation"
+          target_service: "kibana"
+          change_description: "Created webhook connector '{{ connector_name }}' pointing to {{ _eda_webhook_url }}"
+          result: "success"
+          correlation_id: "{{ ansible_date_time.iso8601_micro | to_uuid }}"
+          fda_system_name: "{{ fda_system_name }}"
+          cfr_part11_electronic_record: true
+          cfr_part11_audit_trail: true
+        headers:
+          Content-Type: "application/json"
+          Authorization: "Basic {{ (kibana_user + ':' + kibana_password) | b64encode }}"
+        validate_certs: true
+        status_code: [200, 201]
+      ignore_errors: true
+      tags: [audit]

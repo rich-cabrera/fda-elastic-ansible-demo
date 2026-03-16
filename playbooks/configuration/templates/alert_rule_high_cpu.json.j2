@@ -1,0 +1,36 @@
+{
+  "name": "FDA - High CPU Usage",
+  "rule_type_id": "metrics.alert.threshold",
+  "consumer": "infrastructure",
+  "enabled": true,
+  "params": {
+    "criteria": [
+      {
+        "metric": "system.cpu.user.pct",
+        "comparator": ">",
+        "threshold": [0.9],
+        "timeSize": 5,
+        "timeUnit": "m",
+        "aggType": "avg"
+      }
+    ],
+    "sourceId": "default",
+    "alertOnNoData": false,
+    "alertOnGroupDisappear": false,
+    "groupBy": ["host.name"]
+  },
+  "schedule": {
+    "interval": "{{ item.schedule_interval | default('1m') }}"
+  },
+  "tags": {{ item.tags | default(["fda", "infrastructure", "cpu", "eda-enabled"]) | to_json }},
+  "notify_when": "onActionGroupChange",
+  "actions": [
+    {
+      "group": "metrics.threshold.fired",
+      "id": "{{ connector_id }}",
+      "params": {
+        "body": "{\"alert_name\": \"FDA - High CPU Usage\", \"alert_id\": \"{% raw %}{{rule.id}}{% endraw %}\", \"host\": \"{% raw %}{{context.group}}{% endraw %}\", \"metric\": \"system.cpu.user.pct\", \"value\": \"{% raw %}{{context.value}}{% endraw %}\", \"threshold\": 0.9, \"severity\": \"critical\", \"timestamp\": \"{% raw %}{{date}}{% endraw %}\", \"source\": \"elastic-observability\", \"action_required\": \"investigate_high_cpu\"}"
+      }
+    }
+  ]
+}

@@ -1,0 +1,28 @@
+---
+galaxy_info:
+  author: "Rich Cabrera"
+  description: "Deploy and enroll Elastic Agent via Fleet Server"
+  company: "Elastic"
+  license: "Apache-2.0"
+  min_ansible_version: "2.14"
+  platforms:
+    - name: EL
+      versions:
+        - "8"
+        - "9"
+    - name: Debian
+      versions:
+        - bullseye
+        - bookworm
+    - name: Ubuntu
+      versions:
+        - focal
+        - jammy
+  galaxy_tags:
+    - elastic
+    - observability
+    - monitoring
+    - fleet
+    - agent
+
+dependencies: []

@@ -1,0 +1,47 @@
+---
+# simulate_service_down.yml
+# Simulates a service outage to trigger Elastic Observability alerts
+# Usage: ansible-playbook playbooks/simulation/simulate_service_down.yml -e "target_service=nginx"
+# Note: The remediation playbook should auto-restart the service via Elastic Watcher
+
+- name: Simulate Service Down
+  hosts: "{{ target_hosts | default('managed_hosts') }}"
+  become: true
+
+  vars:
+    service_name: "{{ target_service | default('nginx') }}"
+
+  tasks:
+    - name: Verify service exists and is running
+      ansible.builtin.systemd:
+        name: "{{ service_name }}"
+      register: service_status
+
+    - name: Fail if service is not running
+      ansible.builtin.fail:
+        msg: "Service {{ service_name }} is not currently running. Cannot simulate outage."
+      when: service_status.status.ActiveState != "active"
+
+    - name: Display current service status
+      ansible.builtin.debug:
+        msg: "Service {{ service_name }} is {{ service_status.status.ActiveState }}. Proceeding with simulation."
+
+    - name: Log simulation start to audit trail
+      ansible.builtin.include_role:
+        name: audit_log
+      vars:
+        action: "simulation_start"
+        category: "testing"
+        details: "Service down simulation - stopping {{ service_name }}"
+
+    - name: Stop the service
+      ansible.builtin.systemd:
+        name: "{{ service_name }}"
+        state: stopped
+
+    - name: Display monitoring message
+      ansible.builtin.debug:
+        msg:
+          - "Service {{ service_name }} has been stopped on {{ inventory_hostname }}."
+          - "Monitor Elastic for alert trigger and automatic remediation."
+          - "NOTE: The remediation playbook should auto-restart this service."

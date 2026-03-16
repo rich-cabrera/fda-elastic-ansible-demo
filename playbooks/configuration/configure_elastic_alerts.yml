@@ -1,0 +1,160 @@
+---
+# configure_elastic_alerts.yml - Create Elastic alert rules with webhook actions
+#
+# Usage:
+#   ansible-playbook playbooks/configuration/configure_elastic_alerts.yml
+
+- name: Configure Elastic alert rules with EDA webhook actions
+  hosts: localhost
+  connection: local
+  gather_facts: true
+
+  vars:
+    _kibana_url: "{{ kibana_host }}"
+    connector_name: "EDA Webhook Connector"
+
+    alert_rules:
+      - name: "FDA - High CPU Usage"
+        rule_type_id: "metrics.alert.threshold"
+        template: "alert_rule_high_cpu.json.j2"
+        schedule_interval: "1m"
+        tags: ["fda", "infrastructure", "cpu", "eda-enabled"]
+
+      - name: "FDA - Disk Full Warning"
+        rule_type_id: "metrics.alert.threshold"
+        template: "alert_rule_disk_full.json.j2"
+        schedule_interval: "5m"
+        tags: ["fda", "infrastructure", "disk", "eda-enabled"]
+
+      - name: "FDA - Service Down"
+        rule_type_id: ".es-query"
+        template: "alert_rule_service_down.json.j2"
+        schedule_interval: "1m"
+        tags: ["fda", "infrastructure", "service", "eda-enabled"]
+
+  tasks:
+    # --- Step 1: Ensure webhook connector exists ---
+    - name: Check for existing webhook connector
+      ansible.builtin.uri:
+        url: "{{ _kibana_url }}/api/actions/connectors"
+        method: GET
+        headers:
+          kbn-xsrf: "true"
+          Authorization: "Basic {{ (kibana_user + ':' + kibana_password) | b64encode }}"
+        validate_certs: true
+        status_code: [200]
+      register: existing_connectors
+      tags: [webhook, preflight]
+
+    - name: Find existing EDA webhook connector
+      ansible.builtin.set_fact:
+        existing_connector: "{{ existing_connectors.json | selectattr('name', 'equalto', connector_name) | list | first | default(None) }}"
+      tags: [webhook]
+
+    - name: Create webhook connector if missing
+      ansible.builtin.uri:
+        url: "{{ _kibana_url }}/api/actions/connector"
+        method: POST
+        body_format: json
+        body:
+          name: "{{ connector_name }}"
+          connector_type_id: ".webhook"
+          config:
+            url: "http://localhost:{{ eda_webhook_port }}/api/v1/webhook"
+            method: "post"
+            hasAuth: false
+            headers:
+              Content-Type: "application/json"
+          secrets: {}
+        headers:
+          kbn-xsrf: "true"
+          Authorization: "Basic {{ (kibana_user + ':' + kibana_password) | b64encode }}"
+        validate_certs: true
+        status_code: [200, 201]
+      register: connector_result
+      when: existing_connector is none or existing_connector == None
+      tags: [webhook, configure]
+
+    - name: Set connector_id fact
+      ansible.builtin.set_fact:
+        connector_id: "{{ existing_connector.id if (existing_connector is not none and existing_connector != None) else connector_result.json.id }}"
+      tags: [webhook]
+
+    - name: Display connector ID
+      ansible.builtin.debug:
+        msg: "Webhook connector ID: {{ connector_id }}"
+
+    # --- Step 2: Check for existing alert rules ---
+    - name: Check for existing alert rules
+      ansible.builtin.uri:
+        url: "{{ _kibana_url }}/api/alerting/rules/_find?search={{ item.name | urlencode }}&search_fields=name"
+        method: GET
+        headers:
+          kbn-xsrf: "true"
+          Authorization: "Basic {{ (kibana_user + ':' + kibana_password) | b64encode }}"
+        validate_certs: true
+        status_code: [200]
+      register: existing_rules
+      loop: "{{ alert_rules }}"
+      loop_control:
+        label: "{{ item.name }}"
+      tags: [alerts, preflight]
+
+    # --- Step 3: Create alert rules from templates ---
+    - name: Build alert rule payloads from templates
+      ansible.builtin.set_fact:
+        alert_payloads: "{{ alert_payloads | default([]) + [lookup('template', 'templates/' + item.template) | from_json] }}"
+      loop: "{{ alert_rules }}"
+      loop_control:
+        label: "{{ item.name }}"
+      tags: [alerts, configure]
+
+    - name: Create alert rules via Kibana API
+      ansible.builtin.uri:
+        url: "{{ _kibana_url }}/api/alerting/rule"
+        method: POST
+        body_format: json
+        body: "{{ alert_payloads[idx] }}"
+        headers:
+          kbn-xsrf: "true"
+          Authorization: "Basic {{ (kibana_user + ':' + kibana_password) | b64encode }}"
+        validate_certs: true
+        status_code: [200, 201]
+      register: rule_results
+      loop: "{{ alert_rules }}"
+      loop_control:
+        index_var: idx
+        label: "{{ item.name }}"
+      when: existing_rules.results[idx].json.total == 0
+      tags: [alerts, configure]
+
+    # --- Step 4: Audit trail ---
+    - name: Log alert rule creation to audit trail
+      ansible.builtin.uri:
+        url: "{{ elasticsearch_host }}/fda-demo-audit-trail/_doc"
+        method: POST
+        body_format: json
+        body:
+          "@timestamp": "{{ ansible_date_time.iso8601 }}"
+          event_type: "configuration"
+          action: "alert_rules_configured"
+          action_category: "configuration"
+          actor: "ansible"
+          actor_type: "automation"
+          target_service: "kibana"
+          change_description: "Configured alert rules: {{ alert_rules | map(attribute='name') | list | join(', ') }}"
+          result: "success"
+          fda_system_name: "{{ fda_system_name }}"
+          cfr_part11_electronic_record: true
+          cfr_part11_audit_trail: true
+        headers:
+          Content-Type: "application/json"
+          Authorization: "Basic {{ (kibana_user + ':' + kibana_password) | b64encode }}"
+        validate_certs: true
+        status_code: [200, 201]
+      ignore_errors: true
+      tags: [audit]
+
+    - name: Display configured alert rules
+      ansible.builtin.debug:
+        msg: "Alert rules configured: {{ alert_rules | map(attribute='name') | list | join(', ') }}"
