@@ -57,7 +57,7 @@
   block:
     - name: POST audit document to Elasticsearch
       uri:
-        url: "{{ audit_elasticsearch_host }}:{{ audit_elasticsearch_port }}/{{ audit_index }}-{{ ansible_date_time.date }}/_doc"
+        url: "{{ audit_elasticsearch_host }}/{{ audit_index }}-{{ ansible_date_time.date }}/_doc"
         method: POST
         headers:
           Authorization: "{{ _audit_auth_header }}"
@@ -85,7 +85,7 @@
 
     - name: "RETRY: POST audit document to Elasticsearch (attempt 2)"
       uri:
-        url: "{{ audit_elasticsearch_host }}:{{ audit_elasticsearch_port }}/{{ audit_index }}-{{ ansible_date_time.date }}/_doc"
+        url: "{{ audit_elasticsearch_host }}/{{ audit_index }}-{{ ansible_date_time.date }}/_doc"
         method: POST
         headers:
           Authorization: "{{ _audit_auth_header }}"
