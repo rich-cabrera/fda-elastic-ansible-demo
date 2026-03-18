@@ -31,7 +31,7 @@
 
 - name: Write EDA event to Elasticsearch
   uri:
-    url: "{{ eda_elasticsearch_host }}/{{ eda_events_index }}/_doc"
+    url: "{{ eda_elasticsearch_host }}/{{ eda_events_index }}-{{ ansible_date_time.date }}/_doc"
     method: POST
     headers:
       Authorization: "{{ _eda_auth_header }}"
