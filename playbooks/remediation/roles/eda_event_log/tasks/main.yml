@@ -1,0 +1,52 @@
+---
+# eda_event_log/tasks/main.yml
+# Writes an EDA event processing record to Elasticsearch.
+
+- name: Build EDA event document
+  set_fact:
+    eda_event_document:
+      "@timestamp": "{{ ansible_date_time.iso8601 }}"
+      event_source: "{{ eda_event_source }}"
+      event_type: "{{ eda_event_type }}"
+      alert_name: "{{ eda_alert_name }}"
+      alert_id: "{{ eda_alert_id }}"
+      alert_severity: "{{ eda_alert_severity }}"
+      webhook_received_at: "{{ ansible_date_time.iso8601 }}"
+      rulebook_name: "{{ eda_rulebook_name }}"
+      rule_matched: "{{ eda_rule_matched }}"
+      action_triggered: "{{ eda_action_triggered }}"
+      playbook_dispatched: "{{ eda_playbook_dispatched }}"
+      dispatch_status: "{{ eda_dispatch_status }}"
+      source_host: "{{ eda_source_host }}"
+
+- name: Determine Elasticsearch auth header
+  set_fact:
+    _eda_auth_header: >-
+      {%- if elastic_api_key is defined and elastic_api_key | length > 0 -%}
+      ApiKey {{ elastic_api_key }}
+      {%- else -%}
+      Basic {{ ('elastic:' + elastic_password) | b64encode }}
+      {%- endif -%}
+  no_log: true
+
+- name: Write EDA event to Elasticsearch
+  uri:
+    url: "{{ eda_elasticsearch_host }}/{{ eda_events_index }}/_doc"
+    method: POST
+    headers:
+      Authorization: "{{ _eda_auth_header }}"
+      Content-Type: "application/json"
+    body: "{{ eda_event_document | to_json }}"
+    body_format: json
+    status_code: [200, 201]
+    validate_certs: false
+    timeout: 15
+  register: eda_event_write_result
+  failed_when: false
+
+- name: Log EDA event write status
+  debug:
+    msg: >-
+      EDA event logged: {{ eda_alert_name }} ({{ eda_alert_severity }})
+      -> {{ eda_rule_matched }} -> {{ eda_playbook_dispatched }}
+      [{{ 'OK' if eda_event_write_result.status | default(0) in [200, 201] else 'FAILED' }}]

@@ -11,50 +11,51 @@
         "@timestamp": {
           "type": "date"
         },
-        "playbook_name": {
+        "id": {
+          "type": "long"
+        },
+        "name": {
           "type": "keyword"
         },
-        "playbook_status": {
+        "url": {
           "type": "keyword"
         },
-        "host": {
+        "created_by": {
           "type": "keyword"
         },
-        "task_name": {
+        "started": {
+          "type": "date"
+        },
+        "finished": {
+          "type": "date"
+        },
+        "status": {
           "type": "keyword"
         },
-        "task_action": {
+        "traceback": {
+          "type": "text"
+        },
+        "inventory": {
           "type": "keyword"
         },
-        "task_status": {
+        "project": {
           "type": "keyword"
         },
-        "duration_seconds": {
-          "type": "float"
+        "playbook": {
+          "type": "keyword"
         },
-        "ansible_user": {
+        "credential": {
+          "type": "keyword"
+        },
+        "limit": {
           "type": "keyword"
         },
         "extra_vars": {
           "type": "flattened"
         },
-        "tags": {
-          "type": "keyword"
-        },
-        "changed": {
-          "type": "boolean"
-        },
-        "failures": {
-          "type": "integer"
-        },
-        "ok_count": {
-          "type": "integer"
-        },
-        "skipped": {
-          "type": "integer"
-        },
-        "environment": {
-          "type": "keyword"
+        "hosts": {
+          "type": "object",
+          "enabled": true
         }
       }
     }

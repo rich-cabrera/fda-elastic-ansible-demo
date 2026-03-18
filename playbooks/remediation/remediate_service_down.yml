@@ -46,6 +46,17 @@
         audit_result: "in_progress"
 
     # ---------------------------------------------------------------
+    # EDA Event Log -- record the triggering event
+    # ---------------------------------------------------------------
+    - name: "EDA: Log triggering event"
+      include_role:
+        name: eda_event_log
+      vars:
+        eda_rule_matched: "Remediate Service Down Alert"
+        eda_playbook_dispatched: "remediate_service_down.yml"
+        eda_alert_severity: "{{ severity | default('high') }}"
+
+    # ---------------------------------------------------------------
     # STEP 2: Check current service status
     # ---------------------------------------------------------------
     - name: Check current service status

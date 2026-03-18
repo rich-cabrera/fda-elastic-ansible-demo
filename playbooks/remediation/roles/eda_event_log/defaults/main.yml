@@ -1,0 +1,19 @@
+---
+# eda_event_log role defaults
+# Logs EDA event processing data to the fda-demo-eda-events Elasticsearch index.
+
+eda_elasticsearch_host: "{{ elasticsearch_host }}"
+eda_events_index: "{{ eda_events_index | default('fda-demo-eda-events') }}"
+
+# Event metadata (set by the calling playbook)
+eda_event_source: "kibana-alerting"
+eda_event_type: "alert"
+eda_alert_name: "{{ alert_name | default('unknown') }}"
+eda_alert_id: "{{ alert_id | default(correlation_id | default('unknown')) }}"
+eda_alert_severity: "{{ severity | default('unknown') }}"
+eda_rulebook_name: "elastic_webhook_rulebook"
+eda_rule_matched: "{{ eda_rule_matched | default('unknown') }}"
+eda_action_triggered: "{{ eda_action_triggered | default('run_job_template') }}"
+eda_playbook_dispatched: "{{ ansible_play_name | default('unknown') }}"
+eda_dispatch_status: "{{ eda_dispatch_status | default('success') }}"
+eda_source_host: "{{ target_hosts | default(inventory_hostname) }}"

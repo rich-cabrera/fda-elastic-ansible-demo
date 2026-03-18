@@ -40,6 +40,17 @@
         audit_result: "in_progress"
 
     # ---------------------------------------------------------------
+    # EDA Event Log -- record the triggering event
+    # ---------------------------------------------------------------
+    - name: "EDA: Log triggering event"
+      include_role:
+        name: eda_event_log
+      vars:
+        eda_rule_matched: "Remediate High CPU Alert"
+        eda_playbook_dispatched: "remediate_high_cpu.yml"
+        eda_alert_severity: "{{ severity | default('high') }}"
+
+    # ---------------------------------------------------------------
     # STEP 2: Gather current CPU state
     # ---------------------------------------------------------------
     - name: Capture current CPU load average
